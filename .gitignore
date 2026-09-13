@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+
+model/training_data.csv
+model/artifacts/*.pkl
+streaming/output/
+streaming/checkpoint/
+
+# Spark/Hadoop local metastore junk
+metastore_db/
+derby.log
+spark-warehouse/
+.ruff_cache/
