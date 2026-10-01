@@ -11,6 +11,7 @@ model/train_model.py). Run with spark-submit, e.g.:
 """
 from __future__ import annotations
 
+import logging
 import os
 import pickle
 
@@ -26,6 +27,9 @@ CHECKPOINT_PATH = os.environ.get("CHECKPOINT_PATH", "streaming/checkpoint")
 MODEL_PATH = os.environ.get(
     "MODEL_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "model", "artifacts", "model.pkl")
 )
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
+
+logger = logging.getLogger("streampredict.consumer")
 
 TICK_SCHEMA = StructType([
     StructField("symbol", StringType()),
@@ -35,9 +39,23 @@ TICK_SCHEMA = StructType([
 ])
 
 
+def configure_logging():
+    logging.basicConfig(
+        level=LOG_LEVEL,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+
+
 def load_model():
-    with open(MODEL_PATH, "rb") as f:
-        return pickle.load(f)
+    logger.info("loading model path=%s", MODEL_PATH)
+    try:
+        with open(MODEL_PATH, "rb") as f:
+            model = pickle.load(f)
+    except FileNotFoundError:
+        logger.error("model not found path=%s (run model/train_model.py first)", MODEL_PATH)
+        raise
+    logger.info("model loaded type=%s", type(model).__name__)
+    return model
 
 
 def build_predict_udf():
@@ -55,8 +73,14 @@ def build_predict_udf():
 
 
 def main():
+    configure_logging()
+    logger.info(
+        "starting consumer bootstrap_servers=%s topic=%s output_path=%s checkpoint_path=%s",
+        BOOTSTRAP_SERVERS, TOPIC, OUTPUT_PATH, CHECKPOINT_PATH,
+    )
     spark = SparkSession.builder.appName("StreamPredict").getOrCreate()
     spark.sparkContext.setLogLevel("WARN")
+    logger.info("spark session ready app_id=%s spark_version=%s", spark.sparkContext.applicationId, spark.version)
 
     raw = (
         spark.readStream.format("kafka")
@@ -101,9 +125,22 @@ def main():
         .option("checkpointLocation", CHECKPOINT_PATH)
         .start()
     )
+    logger.info("console query started id=%s run_id=%s", query.id, query.runId)
+    logger.info("parquet query started id=%s run_id=%s path=%s", parquet_query.id, parquet_query.runId, OUTPUT_PATH)
 
-    query.awaitTermination()
-    parquet_query.awaitTermination()
+    try:
+        query.awaitTermination()
+        parquet_query.awaitTermination()
+    except KeyboardInterrupt:
+        logger.info("interrupted, stopping streaming queries")
+    except Exception:
+        logger.exception("streaming query failed")
+        raise
+    finally:
+        for q in (query, parquet_query):
+            if q.isActive:
+                q.stop()
+        logger.info("consumer stopped")
 
 
 if __name__ == "__main__":
