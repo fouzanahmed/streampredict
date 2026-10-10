@@ -26,3 +26,58 @@ jobs:
 
       - name: Compile-check streaming/producer entrypoints (need pyspark/kafka libs to run for real)
         run: python -m py_compile streaming/consumer_job.py producer/producer.py
+
+  kafka-smoke:
+    # Starts the real broker from docker-compose.yml and confirms producer.py
+    # can connect and publish at least one tick to the topic.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      KAFKA_BOOTSTRAP_SERVERS: localhost:9092
+      KAFKA_TOPIC: stock-ticks
+      TICK_INTERVAL_SECONDS: "0.5"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install producer dependencies
+        run: pip install kafka-python==2.0.2
+
+      - name: Start Kafka
+        run: docker compose up -d
+
+      - name: Wait for broker to accept connections
+        run: |
+          for i in $(seq 1 30); do
+            if docker exec streampredict-kafka /opt/kafka/bin/kafka-topics.sh \
+                --bootstrap-server localhost:9092 --list >/dev/null 2>&1; then
+              echo "broker ready after ${i} attempt(s)"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "broker did not become ready" >&2
+          exit 1
+
+      - name: Run producer briefly
+        # SIGINT triggers the producer's KeyboardInterrupt path, so a clean run
+        # exits 0; a connection failure (NoBrokersAvailable) exits non-zero.
+        run: timeout -s INT 10 python producer/producer.py
+
+      - name: Confirm at least one tick was published
+        run: |
+          out=$(docker exec streampredict-kafka /opt/kafka/bin/kafka-console-consumer.sh \
+            --bootstrap-server localhost:9092 --topic "$KAFKA_TOPIC" \
+            --from-beginning --max-messages 1 --timeout-ms 30000)
+          echo "received: $out"
+          echo "$out" | grep -q '"symbol"'
+
+      - name: Dump Kafka logs on failure
+        if: failure()
+        run: docker compose logs kafka
+
+      - name: Stop Kafka
+        if: always()
+        run: docker compose down -v
