@@ -1,3 +1,5 @@
+import ast
+import json
 import os
 import sys
 
@@ -7,7 +9,19 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "model"))
 
-from train_model import FEATURE_COLS, train
+from train_model import (
+    FEATURE_COLS,
+    METADATA_SCHEMA_VERSION,
+    TARGET_COL,
+    file_sha256,
+    metadata_path_for,
+    save_model,
+    train,
+)
+
+CONSUMER_JOB_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "streaming", "consumer_job.py"
+)
 
 
 @pytest.fixture
@@ -41,3 +55,40 @@ def test_trained_model_predicts_expected_shape(synthetic_csv):
     assert list(X.columns) == FEATURE_COLS
     preds = model.predict(X)
     assert preds.shape == (2,)
+
+
+def test_save_model_writes_metadata_alongside_artifact(synthetic_csv, tmp_path):
+    model, metrics = train(data_path=synthetic_csv)
+    model_path = str(tmp_path / "artifacts" / "model.pkl")
+    meta_path = save_model(model, metrics, model_path=model_path)
+
+    assert meta_path == metadata_path_for(model_path)
+    assert meta_path.endswith("model.meta.json")
+    with open(meta_path, encoding="utf-8") as f:
+        metadata = json.load(f)
+    assert metadata["schema_version"] == METADATA_SCHEMA_VERSION
+    assert metadata["feature_cols"] == FEATURE_COLS
+    assert metadata["target_col"] == TARGET_COL
+    assert metadata["model_type"] == "LinearRegression"
+    assert metadata["metrics"]["mae"] == pytest.approx(metrics["mae"])
+    assert metadata["metrics"]["n_train"] + metadata["metrics"]["n_test"] == 200
+    assert metadata["model_sha256"] == file_sha256(model_path)
+    assert "trained_at" in metadata
+
+
+def _consumer_constant(name):
+    # consumer_job.py imports pyspark at module level, which CI doesn't
+    # install, so read its constants from the source instead of importing it.
+    with open(CONSUMER_JOB_PATH, encoding="utf-8") as f:
+        tree = ast.parse(f.read())
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == name for t in node.targets
+        ):
+            return ast.literal_eval(node.value)
+    raise AssertionError(f"{name} not found in consumer_job.py")
+
+
+def test_consumer_expects_the_features_and_schema_the_trainer_writes():
+    assert _consumer_constant("EXPECTED_FEATURE_COLS") == FEATURE_COLS
+    assert METADATA_SCHEMA_VERSION in _consumer_constant("SUPPORTED_METADATA_SCHEMA_VERSIONS")

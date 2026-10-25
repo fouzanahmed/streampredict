@@ -11,9 +11,12 @@ model/train_model.py). Run with spark-submit, e.g.:
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 import pickle
+from datetime import datetime, timezone
 
 import pandas as pd
 from pyspark.sql import SparkSession
@@ -28,6 +31,12 @@ MODEL_PATH = os.environ.get(
     "MODEL_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "model", "artifacts", "model.pkl")
 )
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
+
+# The input contract this job feeds the model (see build_predict_udf) and the
+# metadata layout it understands. Must stay in sync with FEATURE_COLS and
+# METADATA_SCHEMA_VERSION in model/train_model.py.
+EXPECTED_FEATURE_COLS = ["rolling_mean", "rolling_std"]
+SUPPORTED_METADATA_SCHEMA_VERSIONS = {1}
 
 logger = logging.getLogger("streampredict.consumer")
 
@@ -46,15 +55,66 @@ def configure_logging():
     )
 
 
+def metadata_path_for(model_path: str) -> str:
+    return os.path.splitext(model_path)[0] + ".meta.json"
+
+
+def validate_model_metadata(metadata: dict, model_sha256: str) -> None:
+    """Raise ValueError if the metadata describes a model this job can't use."""
+    version = metadata.get("schema_version")
+    if version not in SUPPORTED_METADATA_SCHEMA_VERSIONS:
+        raise ValueError(
+            f"unsupported model metadata schema_version={version!r} "
+            f"(supported: {sorted(SUPPORTED_METADATA_SCHEMA_VERSIONS)})"
+        )
+    feature_cols = metadata.get("feature_cols")
+    if feature_cols != EXPECTED_FEATURE_COLS:
+        raise ValueError(
+            f"model feature_cols={feature_cols!r} do not match the features this job "
+            f"computes {EXPECTED_FEATURE_COLS!r}"
+        )
+    if metadata.get("model_sha256") != model_sha256:
+        raise ValueError(
+            "model file does not match its metadata (sha256 mismatch); the model and "
+            "metadata were not written by the same training run"
+        )
+
+
 def load_model():
     logger.info("loading model path=%s", MODEL_PATH)
+    meta_path = metadata_path_for(MODEL_PATH)
     try:
         with open(MODEL_PATH, "rb") as f:
-            model = pickle.load(f)
+            model_bytes = f.read()
     except FileNotFoundError:
         logger.error("model not found path=%s (run model/train_model.py first)", MODEL_PATH)
         raise
-    logger.info("model loaded type=%s", type(model).__name__)
+    try:
+        with open(meta_path, encoding="utf-8") as f:
+            metadata = json.load(f)
+    except FileNotFoundError:
+        logger.error(
+            "model metadata not found path=%s (re-run model/train_model.py to regenerate it)", meta_path
+        )
+        raise
+
+    try:
+        validate_model_metadata(metadata, hashlib.sha256(model_bytes).hexdigest())
+    except ValueError as e:
+        logger.error("incompatible model path=%s: %s (re-run model/train_model.py)", MODEL_PATH, e)
+        raise
+
+    model = pickle.loads(model_bytes)
+    trained_at = metadata.get("trained_at")
+    age_days = None
+    if trained_at:
+        age = datetime.now(timezone.utc) - datetime.fromisoformat(trained_at)
+        age_days = round(age.total_seconds() / 86400, 1)
+    logger.info(
+        "model loaded type=%s trained_at=%s age_days=%s features=%s mae=%s",
+        type(model).__name__, trained_at, age_days, metadata["feature_cols"],
+        metadata.get("metrics", {}).get("mae"),
+    )
     return model
 
 

@@ -15,7 +15,7 @@ producer/producer.py  -->  Kafka topic "stock-ticks"  -->  streaming/consumer_jo
 - **`producer/producer.py`** — publishes a continuous synthetic tick stream to Kafka.
 - **`model/generate_training_data.py`** + **`model/features.py`** — builds a synthetic historical dataset with rolling-window features (mean, std, momentum) and a next-tick-return label.
 - **`model/train_model.py`** — trains a scikit-learn linear regression to predict next-tick return from `rolling_mean`/`rolling_std`. It deliberately does **not** use `momentum` even though the offline dataset has it: a Spark Structured Streaming tumbling window can compute `avg`/`stddev` directly, but reproducing a trailing-window `pct_change` in a streaming context needs stateful lag joins, which is out of scope for this MVP — so the model is trained only on the two features the streaming path can actually deliver in real time.
-- **`streaming/consumer_job.py`** — the Spark Structured Streaming job: reads from Kafka, computes 5-minute tumbling-window `rolling_mean`/`rolling_std` per symbol, applies the trained model via a pandas UDF, writes results.
+- **`streaming/consumer_job.py`** — the Spark Structured Streaming job: reads from Kafka, computes 5-minute tumbling-window `rolling_mean`/`rolling_std` per symbol, applies the trained model via a pandas UDF, writes results. Before loading the model it validates `model/artifacts/model.meta.json` (written by `train_model.py`: training timestamp, feature list, held-out MAE, model file hash) and refuses to start if the metadata is missing, has an unknown schema version, lists different features than the job computes, or doesn't match the model file.
 
 ## What's actually verified vs. not
 
