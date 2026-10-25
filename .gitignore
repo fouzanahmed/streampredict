@@ -6,6 +6,7 @@ venv/
 
 model/training_data.csv
 model/artifacts/*.pkl
+model/artifacts/*.meta.json
 streaming/output/
 streaming/checkpoint/
 
