@@ -24,18 +24,40 @@ from sklearn.model_selection import train_test_split
 # actually deliver in real time, to keep training and inference consistent.
 FEATURE_COLS = ["rolling_mean", "rolling_std"]
 TARGET_COL = "next_return"
+TEST_SIZE = 0.2
+# Minimum rows needed for a meaningful 80/20 split: at least a couple of
+# held-out rows and enough training rows to fit the two-feature regressor.
+MIN_ROWS = 10
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA_PATH = os.path.join(HERE, "training_data.csv")
 MODEL_PATH = os.path.join(HERE, "artifacts", "model.pkl")
 
 
+def validate_training_frame(df: pd.DataFrame, source: str = "training data") -> None:
+    """Raise a descriptive ValueError if `df` can't be used to train the model."""
+    required = FEATURE_COLS + [TARGET_COL]
+    missing = [col for col in required if col not in df.columns]
+    if missing:
+        raise ValueError(
+            f"{source} is missing required column(s) {missing}; "
+            f"expected {required}, found {list(df.columns)}. "
+            "Regenerate it with `python model/generate_training_data.py`."
+        )
+    if len(df) < MIN_ROWS:
+        raise ValueError(
+            f"{source} has {len(df)} row(s); at least {MIN_ROWS} are needed "
+            f"for a train/test split with test_size={TEST_SIZE}."
+        )
+
+
 def train(data_path: str = DATA_PATH):
     df = pd.read_csv(data_path)
+    validate_training_frame(df, source=f"Training data at {data_path!r}")
     X = df[FEATURE_COLS]
     y = df[TARGET_COL]
 
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=TEST_SIZE, random_state=42)
 
     model = LinearRegression()
     model.fit(X_train, y_train)
