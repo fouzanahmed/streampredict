@@ -21,7 +21,7 @@ producer/producer.py  -->  Kafka topic "stock-ticks"  -->  streaming/consumer_jo
 
 This was built and tested in one pass; here's the honest status:
 
-- **Verified, actually run:** `producer/tick_generator.py`, `model/features.py`, `model/train_model.py`, and all 9 pytest tests — installed a clean venv, ran the full offline pipeline end to end (`generate_training_data.py` → `train_model.py`), and ran `ruff check` (0 issues after one auto-fix pass).
+- **Verified, actually run:** `producer/tick_generator.py`, `model/features.py`, `model/train_model.py`, and the full pytest suite under `tests/` — installed a clean venv, ran the full offline pipeline end to end (`generate_training_data.py` → `train_model.py`), and ran `ruff check` (0 issues after one auto-fix pass).
 - **Observed result** (from an actual run, not invented): on a held-out test split of synthetic random-walk data, the trained model's MAE (0.00159) was essentially identical to a naive "always predict zero return" baseline (0.00159). That's the expected, correct outcome for a pure random walk with no injected signal — it demonstrates the training/inference pipeline works end to end, **not** that the model has predictive edge. A real deployment would need real market data and feature engineering to do better than the naive baseline.
 - **Not verified (syntax-checked only):** `producer/producer.py` and `streaming/consumer_job.py` — these need a running Kafka broker and a Spark runtime respectively, which weren't exercised end-to-end in this environment. Both pass a Python compile check (no syntax errors), but haven't been run against a live Kafka topic.
 
@@ -44,6 +44,27 @@ python producer/producer.py
 
 # 4. In another terminal: run the Spark Structured Streaming job
 spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1 streaming/consumer_job.py
+```
+
+## Configuration
+
+The producer and the streaming job are configured through environment variables. Every variable has a default, so both run against the local `docker compose` setup with no configuration.
+
+| Variable | Used by | Default | Description |
+|---|---|---|---|
+| `KAFKA_BOOTSTRAP_SERVERS` | `producer.py`, `consumer_job.py` | `localhost:9092` | Kafka broker address(es) |
+| `KAFKA_TOPIC` | `producer.py`, `consumer_job.py` | `stock-ticks` | Topic the ticks are published to and consumed from |
+| `SYMBOLS` | `producer.py` | `AAPL,MSFT,GOOG` | Comma-separated list of ticker symbols to simulate |
+| `TICK_INTERVAL_SECONDS` | `producer.py` | `1.0` | Seconds to sleep between batches (one tick per symbol per batch) |
+| `LOG_LEVEL` | `producer.py`, `consumer_job.py` | `INFO` | Python logging level (case-insensitive). `DEBUG` makes the producer log every published tick |
+| `OUTPUT_PATH` | `consumer_job.py` | `streaming/output` | Where the Parquet prediction output is written (relative paths resolve against the working directory) |
+| `CHECKPOINT_PATH` | `consumer_job.py` | `streaming/checkpoint` | Spark Structured Streaming checkpoint location (relative to the working directory) |
+| `MODEL_PATH` | `consumer_job.py` | `model/artifacts/model.pkl` (resolved relative to the repo root, not the working directory) | Path to the trained model produced by `model/train_model.py` |
+
+Example:
+
+```bash
+SYMBOLS=AAPL,TSLA TICK_INTERVAL_SECONDS=0.5 LOG_LEVEL=DEBUG python producer/producer.py
 ```
 
 ## Technologies
