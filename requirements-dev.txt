@@ -1,0 +1,8 @@
+# CI / unit-test dependencies: same pins as requirements.txt, minus pyspark
+# (unit tests and lint don't need a Spark runtime). Keep versions in sync
+# with requirements.txt when bumping.
+kafka-python==2.0.2
+pandas==2.2.3
+scikit-learn==1.5.2
+pytest==8.2.2
+ruff==0.5.0
