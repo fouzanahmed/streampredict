@@ -53,7 +53,8 @@ Kafka, PySpark Structured Streaming, pandas, scikit-learn, Docker.
 ## Tests
 
 ```bash
+pip install -r requirements-dev.txt  # pinned test/lint deps, no pyspark needed
 pytest tests/
 ```
 
-Covers the tick generator, feature engineering, and model training/inference — all pure-Python logic that doesn't require a live Kafka or Spark cluster. `streaming/consumer_job.py` and `producer/producer.py` aren't covered by these tests since they need live infrastructure; CI only lints and compile-checks them.
+Covers the tick generator, feature engineering, and model training/inference — all pure-Python logic that doesn't require a live Kafka or Spark cluster. `streaming/consumer_job.py` and `producer/producer.py` aren't covered by these tests since they need live infrastructure; CI only lints and compile-checks them. CI installs `requirements-dev.txt`, which uses the same pinned versions as `requirements.txt` minus pyspark, so CI runs against the same library versions as local setup.
